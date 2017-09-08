@@ -24,7 +24,6 @@ func mapF(document string, value string) (res []mapreduce.KeyValue) {
 		}
 	})
 
-
 	for _, word := range words {
 		res = append(res, mapreduce.KeyValue{word, document})
 	}
@@ -49,7 +48,6 @@ func reduceF(key string, values []string) string {
 	}
 
 	cleaned := []string{}
-
 	for _, value := range values {
 		if !isExist(cleaned, value){
 			cleaned = append(cleaned, value)

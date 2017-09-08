@@ -24,8 +24,26 @@ func main() {
 	fmt.Println(slice)
 
 
+	test := 5
+	zero(&test)
+	fmt.Println(test)
+
+	fmt.Println(*(&test))
+
+	xPtr := new(int)
+	zero(xPtr)
+	fmt.Println(*xPtr)
+
+
 
 }
+
+
+func zero(xPtr *int){
+	*xPtr = 1000000;
+}
+
+
 
 func remove(s []string, r string) []string {
 	for i, v := range s {
