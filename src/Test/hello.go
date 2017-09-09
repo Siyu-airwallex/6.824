@@ -34,6 +34,11 @@ func main() {
 	zero(xPtr)
 	fmt.Println(*xPtr)
 
+	array := [4]int{1,2,3,4}
+	for index := range array {
+		fmt.Println(index)
+	}
+
 
 
 }
