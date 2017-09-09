@@ -188,14 +188,35 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
-	if (rf.currentTerm < args.Term) {
-		rf.currentTerm = args.Term
-		rf.votedFor = args.CandidateId
-		reply.Term = args.Term
-		reply.VoteGranted = true
-	}else{
+	if(rf.currentTerm > args.Term){
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
+	}else if(rf.currentTerm == args.Term) {
+
+		if(rf.votedFor == args.CandidateId && args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm()){
+			fmt.Printf("server %d vote for candidate %d in term %d \n", rf.me, args.CandidateId, rf.currentTerm)
+			rf.chanGrantVote <- true
+			reply.Term = args.Term
+			reply.VoteGranted = true
+			fmt.Printf("server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
+		}else {
+			reply.Term = args.Term
+			reply.VoteGranted = false
+		}
+
+	}else{
+		if(args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm()){
+			rf.currentTerm = args.Term
+			rf.votedFor = args.CandidateId
+			fmt.Printf("server %d vote for candidate %d in term %d \n", rf.me, args.CandidateId, rf.currentTerm)
+			rf.chanGrantVote <- true
+			reply.Term = args.Term
+			reply.VoteGranted = true
+			fmt.Printf("server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
+		}else{
+			reply.Term = args.Term
+			reply.VoteGranted = false
+		}
 	}
 
 }
@@ -220,10 +241,17 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	fmt.Printf("server %d send request to server %d %t \n", rf.me, server, ok)
 	if(ok){
 		if(rf.currentTerm == reply.Term && reply.VoteGranted == true){
 			rf.voteCount ++
 		}
+		if(rf.currentTerm < reply.Term){
+			rf.currentTerm = reply.Term
+			rf.chanHeartBeat <- true
+			fmt.Printf("leader server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
+		}
+
 	}
 	return ok
 }
@@ -241,6 +269,7 @@ func (rf *Raft) broadcastRequestVote(){
 	}
 
 	if(rf.voteCount > len(rf.peers)/2){
+		fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
 		rf.chanLeader <- true
 	}
 }
@@ -265,11 +294,13 @@ type AppendEntriesReply struct {
 
 // AppendEntries RPC handler.
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	if (rf.currentTerm <= args.Term) {
+	if(rf.currentTerm > args.Term){
+		reply.Success = false
+		reply.Term = rf.currentTerm
+	}else{
 		rf.currentTerm = args.Term
 		reply.Success = true
 		reply.Term = args.Term
-
 		rf.chanHeartBeat <- true
 	}
 
@@ -289,7 +320,12 @@ func (rf *Raft) boardcastAppendEntries(){
 	reply := &AppendEntriesReply{}
 	for index := range rf.peers{
 		if(index != rf.me){
-			rf.sendAppendEntries(index, args, reply)
+			ok := rf.sendAppendEntries(index, args, reply)
+			if(ok && rf.currentTerm < reply.Term && !reply.Success){
+				rf.currentTerm = reply.Term
+				rf.state = FOLLOWER
+				fmt.Printf("server(Leader) %d becomes follower in term %d \n", rf.me, rf.currentTerm)
+			}
 		}
 	}
 }
@@ -368,16 +404,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			switch  rf.state {
 			case FOLLOWER :
 				select {
-				case <- rf.chanHeartBeat: rf.state = FOLLOWER
-				case <- rf.chanLeader: rf.state = FOLLOWER
-				case <-time.After(time.Duration(rand.Int63()%333+550) * time.Millisecond):
+				case <- rf.chanGrantVote:
+				case <- rf.chanHeartBeat:
+				case <-time.After(time.Duration(rand.Int63()%333+750) * time.Millisecond):
+					fmt.Printf("server(Follower) %d changes to candidate in term %d \n", rf.me, rf.currentTerm)
 					rf.state = CANDIDATE
 				}
 			case LEADER :
-				if(<-rf.chanHeartBeat) {
-					rf.state = FOLLOWER
-				}
-				fmt.Printf("Leader: %d broadcast AppendEntries\n", me)
+				//fmt.Printf("server(Leader): %d broadcast AppendEntries in term %d \n", me, rf.currentTerm)
 				go rf.boardcastAppendEntries()
 				time.Sleep(HBINTERVERL)
 			case CANDIDATE :
@@ -386,10 +420,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.votedFor = rf.me
 				rf.voteCount = 1
 				//rf.mu.UnLock()
+				fmt.Printf("server(Candidate) %d in term %d\n", me, rf.currentTerm)
 				go rf.broadcastRequestVote()
-				fmt.Printf("Candidate %d in term %d\n", me, rf.currentTerm)
+				fmt.Printf("server(Candidate) %d broadcast RequestVote in term %d \n", rf.me, rf.currentTerm)
 				select {
-				case <-time.After(time.Duration(rand.Int63()%333+550) * time.Millisecond): rf.state = CANDIDATE
+				case <-time.After(time.Duration(rand.Int63()%333+750) * time.Millisecond):
 				case <-rf.chanHeartBeat:
 					rf.state = FOLLOWER
 				case <-rf.chanLeader:
