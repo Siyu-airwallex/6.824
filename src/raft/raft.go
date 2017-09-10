@@ -205,7 +205,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		}
 
 	}else{
-		if(args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm()){
+		if(rf.votedFor == -1 && args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm()){
 			rf.currentTerm = args.Term
 			rf.votedFor = args.CandidateId
 			fmt.Printf("server %d vote for candidate %d in term %d \n", rf.me, args.CandidateId, rf.currentTerm)
@@ -242,36 +242,44 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	fmt.Printf("server %d send request to server %d %t \n", rf.me, server, ok)
+	rf.mu.Lock()
 	if(ok){
-		if(rf.currentTerm == reply.Term && reply.VoteGranted == true){
+		if(rf.state == CANDIDATE && rf.currentTerm == reply.Term && reply.VoteGranted == true){
 			rf.voteCount ++
+			if(rf.voteCount > len(rf.peers)/2){
+				fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
+				rf.chanLeader <- true
+			}
 		}
-		if(rf.currentTerm < reply.Term){
+		if(rf.state == CANDIDATE && rf.currentTerm < reply.Term){
 			rf.currentTerm = reply.Term
 			rf.chanHeartBeat <- true
 			fmt.Printf("leader server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
 		}
 
+	}else{
+		if(rf.state == CANDIDATE){
+			rf.peers[server].Call("Raft.RequestVote", args, reply)
+			//fmt.Printf("server(Candidate) %d retry to send request vote to server %d in term %d \n", rf.me, server, rf.currentTerm)
+		}
 	}
+	rf.mu.Unlock()
 	return ok
 }
 
 
 
 func (rf *Raft) broadcastRequestVote(){
+
+	fmt.Printf("server(Candidate) %d broadcast RequestVote in term %d \n", rf.me, rf.currentTerm)
 	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.getLastLogIndex(), rf.getLastLogTerm()}
 	reply := &RequestVoteReply{}
-
 	for index := range rf.peers{
 		if(index != rf.me) {
-			rf.sendRequestVote(index, args, reply)
+			go rf.sendRequestVote(index, args, reply)
 		}
 	}
 
-	if(rf.voteCount > len(rf.peers)/2){
-		fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
-		rf.chanLeader <- true
-	}
 }
 
 
@@ -298,6 +306,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Success = false
 		reply.Term = rf.currentTerm
 	}else{
+		rf.votedFor = -1
 		rf.currentTerm = args.Term
 		reply.Success = true
 		reply.Term = args.Term
@@ -310,22 +319,31 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool{
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	rf.mu.Lock()
+	if(ok && rf.state == LEADER && rf.currentTerm < reply.Term && !reply.Success){
+		rf.currentTerm = reply.Term
+		rf.state = FOLLOWER
+		fmt.Printf("server(Leader) %d becomes follower in term %d \n", rf.me, rf.currentTerm)
+	}else{
+		if(rf.state == LEADER){
+			rf.peers[server].Call("Raft.AppendEntries", args, reply)
+			//fmt.Printf("server(leader) %d retry to send appendEntries rpc to server %d in term %d \n", rf.me, server, rf.currentTerm)
+		}
+	}
+	rf.mu.Unlock()
 	return ok
 }
 
 
 
 func (rf *Raft) boardcastAppendEntries(){
+	//fmt.Printf("server(Leader): %d broadcast AppendEntries in term %d \n", me, rf.currentTerm)
 	args := AppendEntriesArgs{rf.currentTerm, rf.me,  rf.getPrevLogIndex(), rf.getPrevLogTerm(), rf.log, rf.commitIndex}
 	reply := &AppendEntriesReply{}
 	for index := range rf.peers{
 		if(index != rf.me){
-			ok := rf.sendAppendEntries(index, args, reply)
-			if(ok && rf.currentTerm < reply.Term && !reply.Success){
-				rf.currentTerm = reply.Term
-				rf.state = FOLLOWER
-				fmt.Printf("server(Leader) %d becomes follower in term %d \n", rf.me, rf.currentTerm)
-			}
+			go rf.sendAppendEntries(index, args, reply)
+
 		}
 	}
 }
@@ -389,10 +407,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.log = append(rf.log, LogEntry{Term:0})
 	rf.currentTerm = 0
-	rf.chanHeartBeat = make(chan bool, 100)
+	rf.chanHeartBeat = make(chan bool)
 	rf.chanCommit = make(chan bool, 100)
-	rf.chanGrantVote = make(chan bool, 100)
-	rf.chanLeader = make(chan bool, 100)
+	rf.chanGrantVote = make(chan bool)
+	rf.chanLeader = make(chan bool)
 	rf.chanApplyMsg = applyCh
 
 	// initialize from state persisted before a crash
@@ -406,12 +424,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				select {
 				case <- rf.chanGrantVote:
 				case <- rf.chanHeartBeat:
-				case <-time.After(time.Duration(rand.Int63()%333+750) * time.Millisecond):
+				case <-time.After(time.Duration(ElectionTimeoutConst()) * time.Millisecond):
 					fmt.Printf("server(Follower) %d changes to candidate in term %d \n", rf.me, rf.currentTerm)
 					rf.state = CANDIDATE
 				}
 			case LEADER :
-				//fmt.Printf("server(Leader): %d broadcast AppendEntries in term %d \n", me, rf.currentTerm)
+
 				go rf.boardcastAppendEntries()
 				time.Sleep(HBINTERVERL)
 			case CANDIDATE :
@@ -419,12 +437,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.currentTerm ++
 				rf.votedFor = rf.me
 				rf.voteCount = 1
-				//rf.mu.UnLock()
+				//rf.mu.Unlock()
 				fmt.Printf("server(Candidate) %d in term %d\n", me, rf.currentTerm)
 				go rf.broadcastRequestVote()
-				fmt.Printf("server(Candidate) %d broadcast RequestVote in term %d \n", rf.me, rf.currentTerm)
 				select {
-				case <-time.After(time.Duration(rand.Int63()%333+750) * time.Millisecond):
+				case <-time.After(time.Duration(ElectionTimeoutConst()) * time.Millisecond):
 				case <-rf.chanHeartBeat:
 					rf.state = FOLLOWER
 				case <-rf.chanLeader:
@@ -446,4 +463,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 
 	return rf
+}
+
+
+
+func ElectionTimeoutConst() int {
+	res := rand.Intn(300) + 800
+	return res
+
 }
