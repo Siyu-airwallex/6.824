@@ -63,6 +63,7 @@ type LogEntry struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
+	wg        sync.WaitGroup
 	mu        sync.Mutex
 	peers     []*labrpc.ClientEnd
 	persister *Persister
@@ -241,7 +242,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	fmt.Printf("server %d send request to server %d %t \n", rf.me, server, ok)
+	fmt.Printf("server %d send requestVote to server %d in term %d %t \n", rf.me, server, rf.currentTerm, ok)
 	rf.mu.Lock()
 	if(ok){
 		if(rf.state == CANDIDATE && rf.currentTerm == reply.Term && reply.VoteGranted == true){
@@ -259,7 +260,7 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 		}
 
 	}else{
-		if(rf.state == CANDIDATE){
+		if(rf.state == CANDIDATE && rf.currentTerm == args.Term){
 			rf.peers[server].Call("Raft.RequestVote", args, reply)
 			//fmt.Printf("server(Candidate) %d retry to send request vote to server %d in term %d \n", rf.me, server, rf.currentTerm)
 		}
@@ -319,6 +320,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool{
+	defer rf.wg.Done()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()
 	if(ok && rf.state == LEADER && rf.currentTerm < reply.Term && !reply.Success){
@@ -327,7 +329,7 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 		rf.chanHeartBeat <- true
 		fmt.Printf("server(Leader) %d becomes follower in term %d \n", rf.me, rf.currentTerm)
 	}else{
-		if(rf.state == LEADER){
+		if(rf.state == LEADER && rf.currentTerm == args.Term){
 			rf.peers[server].Call("Raft.AppendEntries", args, reply)
 			//fmt.Printf("server(leader) %d retry to send appendEntries rpc to server %d in term %d \n", rf.me, server, rf.currentTerm)
 		}
@@ -344,10 +346,12 @@ func (rf *Raft) boardcastAppendEntries(){
 	reply := &AppendEntriesReply{}
 	for index := range rf.peers{
 		if(index != rf.me){
+			rf.wg.Add(1)
 			go rf.sendAppendEntries(index, args, reply)
 
 		}
 	}
+	rf.wg.Wait()
 }
 
 
@@ -400,9 +404,11 @@ func (rf *Raft) Kill() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
+
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+
 
 	// Your initialization code here.
 	rf.state = FOLLOWER
@@ -431,11 +437,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					rf.state = CANDIDATE
 				}
 			case LEADER :
-				go rf.boardcastAppendEntries()
+				rf.boardcastAppendEntries()
 				time.Sleep(HBINTERVERL)
 				select{
+				case <- rf.chanGrantVote: rf.state = FOLLOWER
 				case <- rf.chanHeartBeat: rf.state = FOLLOWER
-				default: go rf.boardcastAppendEntries()
+				default: rf.boardcastAppendEntries()
 						time.Sleep(HBINTERVERL)
 				}
 			case CANDIDATE :
@@ -445,9 +452,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.voteCount = 1
 				//rf.mu.Unlock()
 				fmt.Printf("server(Candidate) %d in term %d\n", me, rf.currentTerm)
-				go rf.broadcastRequestVote()
+				rf.broadcastRequestVote()
 				select {
-				case <-time.After(time.Duration(ElectionTimeoutConst()) * time.Millisecond):
 				case <-rf.chanHeartBeat:
 					rf.state = FOLLOWER
 				case <-rf.chanLeader:
@@ -459,6 +465,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						rf.nextIndex[i] = rf.getLastLogIndex() + 1
 						rf.matchIndex[i] = 0
 					}
+				case <-time.After(time.Duration(ElectionTimeoutConst()) * time.Millisecond):
 					//rf.mu.Unlock()
 				}
 
