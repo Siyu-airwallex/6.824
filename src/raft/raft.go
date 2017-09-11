@@ -35,7 +35,7 @@ const (
 	CANDIDATE
 	FOLLOWER
 
-	HBINTERVERL = 50 * time.Millisecond
+	HBINTERVERL = 25 * time.Millisecond
 
 )
 
@@ -252,6 +252,7 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 			}
 		}
 		if(rf.state == CANDIDATE && rf.currentTerm < reply.Term){
+			rf.votedFor = -1
 			rf.currentTerm = reply.Term
 			rf.chanHeartBeat <- true
 			fmt.Printf("leader server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
@@ -321,8 +322,9 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()
 	if(ok && rf.state == LEADER && rf.currentTerm < reply.Term && !reply.Success){
+		rf.votedFor = -1
 		rf.currentTerm = reply.Term
-		rf.state = FOLLOWER
+		rf.chanHeartBeat <- true
 		fmt.Printf("server(Leader) %d becomes follower in term %d \n", rf.me, rf.currentTerm)
 	}else{
 		if(rf.state == LEADER){
@@ -429,9 +431,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					rf.state = CANDIDATE
 				}
 			case LEADER :
-
 				go rf.boardcastAppendEntries()
 				time.Sleep(HBINTERVERL)
+				select{
+				case <- rf.chanHeartBeat: rf.state = FOLLOWER
+				default: go rf.boardcastAppendEntries()
+						time.Sleep(HBINTERVERL)
+				}
 			case CANDIDATE :
 				//rf.mu.Lock()
 				rf.currentTerm ++
@@ -468,7 +474,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 
 func ElectionTimeoutConst() int {
-	res := rand.Intn(300) + 800
+	res := rand.Intn(300) + 500
 	return res
 
 }
