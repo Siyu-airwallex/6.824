@@ -15,7 +15,6 @@ import "math/rand"
 import "sync/atomic"
 import (
 	"sync"
-	"strconv"
 )
 
 // The tester generously allows solutions to complete elections in one second
@@ -54,28 +53,35 @@ func TestReElection(t *testing.T) {
 
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
+	fmt.Printf("server %d disconnect from cluster \n", leader1)
  	cfg.checkOneLeader()
+ 	fmt.Printf("cluster leader is %d \n", cfg.checkOneLeader())
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
 	cfg.connect(leader1)
+	fmt.Printf("server %d reconnect from cluster \n", leader1)
 	leader2 := cfg.checkOneLeader()
+	fmt.Printf("cluster leader is %d \n", cfg.checkOneLeader())
 
-	fmt.Printf(strconv.Itoa(leader2))
+	//fmt.Printf(strconv.Itoa(leader2))
 
 	//// if there's no quorum, no leader should be elected.
 	cfg.disconnect(leader2)
-	//cfg.disconnect((leader2 + 1) % servers)
-	//time.Sleep(2 * RaftElectionTimeout)
-	//cfg.checkNoLeader()
+	fmt.Printf("server %d disconnect from cluster \n", leader2)
+	another := (leader2 + 1) % servers
+	cfg.disconnect((leader2 + 1) % servers)
+	fmt.Printf("server %d disconnect from cluster \n", another)
+	time.Sleep(2 * RaftElectionTimeout)
+	cfg.checkNoLeader()
 
 	//// if a quorum arises, it should elect a leader.
-	cfg.connect((leader2 + 1) % servers)
-	cfg.checkOneLeader()
-
-	// re-join of last node shouldn't prevent leader from existing.
-	cfg.connect(leader2)
-	cfg.checkOneLeader()
+	//cfg.connect((leader2 + 1) % servers)
+	//cfg.checkOneLeader()
+	//
+	//// re-join of last node shouldn't prevent leader from existing.
+	//cfg.connect(leader2)
+	//cfg.checkOneLeader()
 
 	fmt.Printf("  ... Passed\n")
 }
