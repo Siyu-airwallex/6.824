@@ -264,7 +264,8 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 
 	}else{
 		if(rf.state == CANDIDATE && rf.currentTerm == args.Term){
-			rf.peers[server].Call("Raft.RequestVote", args, reply)
+			//rf.peers[server].Call("Raft.RequestVote", args, reply)
+			go rf.sendRequestVote(server,args, reply)
 			fmt.Printf("server(Candidate) %d retry to send request vote to server %d in term %d \n", rf.me, server, rf.currentTerm)
 		}
 	}
@@ -340,7 +341,8 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 		}
 	}else{
 		if(rf.state == LEADER && rf.currentTerm == args.Term){
-			rf.peers[server].Call("Raft.AppendEntries", args, reply)
+			go rf.sendAppendEntries(server, args, reply)
+			//rf.peers[server].Call("Raft.AppendEntries", args, reply)
 			fmt.Printf("server(leader) %d retry to send appendEntries rpc to server %d in term %d \n", rf.me, server, rf.currentTerm)
 		}
 	}
@@ -435,30 +437,36 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-
 	go func(){
 		for {
 			switch  rf.state {
 			case FOLLOWER :
-				timer := time.NewTimer(time.Duration(ElectionTimeoutConst()) * time.Millisecond)
+				timer := time.NewTimer(ElectionTimeoutConst())
 				select {
-				case <- rf.chanGrantVote: timer.Reset(time.Duration(ElectionTimeoutConst()) * time.Millisecond)
-				case <- rf.chanHeartBeat: timer.Reset(time.Duration(ElectionTimeoutConst()) * time.Millisecond)
+				case <- rf.chanGrantVote:
+					timer.Reset(ElectionTimeoutConst())
+					fmt.Printf("server(Follower) %d reset election timeout in term %d \n", rf.me, rf.currentTerm)
+				case <- rf.chanHeartBeat:
+					timer.Reset(ElectionTimeoutConst())
+					fmt.Printf("server(Follower) %d reset election timeout in term %d \n", rf.me, rf.currentTerm)
 				case <- timer.C:
+					fmt.Printf("server(Follower) %d election time expired in term %d \n", rf.me, rf.currentTerm)
 					fmt.Printf("server(Follower) %d changes to candidate in term %d \n", rf.me, rf.currentTerm)
 					rf.state = CANDIDATE
 				}
 			case LEADER :
 				rf.boardcastAppendEntries()
-				time.Sleep(HBINTERVERL)
 				select{
-				case <- rf.chanGrantVote: rf.state = FOLLOWER
-				case <- rf.chanHeartBeat: rf.state = FOLLOWER
-				default: rf.boardcastAppendEntries()
-						time.Sleep(HBINTERVERL)
+				case <- rf.chanGrantVote:
+					rf.state = FOLLOWER
+					fmt.Printf("server(Leader) %d changes to follower[chanGrantVote] in term %d \n", rf.me, rf.currentTerm)
+				case <- rf.chanHeartBeat:
+					rf.state = FOLLOWER
+					fmt.Printf("server(Leader) %d changes to follower[chanHeartBeat] in term %d \n", rf.me, rf.currentTerm)
+				case <-time.After(HBINTERVERL):
 				}
 			case CANDIDATE :
-				timer := time.NewTimer(time.Duration(ElectionTimeoutConst()) * time.Millisecond)
+				timer := time.NewTimer(ElectionTimeoutConst())
 				//rf.mu.Lock()
 				rf.currentTerm ++
 				rf.votedFor = rf.me
@@ -468,7 +476,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.broadcastRequestVote()
 				select {
 				case <-rf.chanHeartBeat:
-					timer.Reset(time.Duration(ElectionTimeoutConst()) * time.Millisecond)
+					timer.Reset(ElectionTimeoutConst())
 					rf.state = FOLLOWER
 				case <-rf.chanLeader:
 					//rf.mu.Lock()
@@ -494,8 +502,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 
 
-func ElectionTimeoutConst() int {
-	res := rand.Intn(300) + 500
-	return res
+func ElectionTimeoutConst() time.Duration {
+	random := rand.Intn(300) + 500
+	return time.Duration(random)*time.Millisecond
 
 }
