@@ -62,24 +62,22 @@ func TestReElection(t *testing.T) {
 	// disturb the old leader.
 	cfg.connect(leader1)
 	fmt.Printf("server %d reconnect back to cluster \n", leader1)
-	time.Sleep(1*time.Second)
-	//leader2 := cfg.checkOneLeader()
-	fmt.Printf("cluster leader is %d \n", cfg.checkOneLeader())
+	leader2 := cfg.checkOneLeader()
+	//fmt.Printf("cluster leader is %d \n", cfg.checkOneLeader())
 
-	//fmt.Printf(strconv.Itoa(leader2))
+	// if there's no quorum, no leader should be elected.
+	cfg.disconnect(leader2)
+	fmt.Printf("server %d disconnect from cluster \n", leader2)
+	another := (leader2 + 1) % servers
+	cfg.disconnect((leader2 + 1) % servers)
+	fmt.Printf("server %d disconnect from cluster \n", another)
+	time.Sleep(2 * RaftElectionTimeout)
+	cfg.checkNoLeader()
 
-	//// if there's no quorum, no leader should be elected.
-	//cfg.disconnect(leader2)
-	//fmt.Printf("server %d disconnect from cluster \n", leader2)
-	//another := (leader2 + 1) % servers
-	//cfg.disconnect((leader2 + 1) % servers)
-	//fmt.Printf("server %d disconnect from cluster \n", another)
-	//time.Sleep(2 * RaftElectionTimeout)
-	//cfg.checkNoLeader()
-
-	//// if a quorum arises, it should elect a leader.
-	//cfg.connect((leader2 + 1) % servers)
-	//cfg.checkOneLeader()
+	// if a quorum arises, it should elect a leader.
+	cfg.connect((leader2 + 1) % servers)
+	fmt.Printf("server %d reconnect back to cluster \n", another)
+	cfg.checkOneLeader()
 	//
 	//// re-join of last node shouldn't prevent leader from existing.
 	//cfg.connect(leader2)
