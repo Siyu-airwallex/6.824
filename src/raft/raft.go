@@ -223,36 +223,34 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	fmt.Printf("server %d send requestVote to server %d in term %d %t \n", rf.me, server, rf.currentTerm, ok)
+	rf.mu.Lock()
 	if (ok) {
 		if (rf.state == CANDIDATE && rf.currentTerm == reply.Term && reply.VoteGranted == true) {
-			rf.mu.Lock()
 			rf.voteCount ++
-			if (rf.voteCount > len(rf.peers)/2) {
-				if (rf.state != LEADER) {
-					fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
-					rf.chanLeader <- true
+			rf.once.Do(
+			func() {
+				if (rf.voteCount > len(rf.peers)/2) {
+					if (rf.state != LEADER) {
+						fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
+						rf.chanLeader <- true
+					}
 				}
-			}
-			rf.mu.Unlock()
+			})
 		}
 		if (rf.state == CANDIDATE && rf.currentTerm < reply.Term) {
-			rf.mu.Lock()
 			rf.votedFor = -1
 			rf.currentTerm = reply.Term
 			rf.chanHeartBeat <- true
 			fmt.Printf("leader server %d becomes follower in term %d \n", rf.me, rf.currentTerm)
-			rf.mu.Unlock()
 		}
 
 	} else {
 		if (rf.state == CANDIDATE && rf.currentTerm == args.Term) {
-			//rf.peers[server].Call("Raft.RequestVote", args, reply)
-			rf.mu.Lock()
 			go rf.sendRequestVote(server, args, reply)
 			fmt.Printf("server(Candidate) %d retry to send request vote to server %d in term %d \n", rf.me, server, rf.currentTerm)
-			rf.mu.Unlock()
 		}
 	}
+	rf.mu.Unlock()
 	return ok
 }
 
@@ -290,11 +288,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Success = false
 		reply.Term = rf.currentTerm
 	} else {
-		rf.votedFor = -1
-		rf.currentTerm = args.Term
-		reply.Success = true
-		reply.Term = args.Term
-		rf.chanHeartBeat <- true
+		if(rf.currentTerm == args.Term && rf.state == LEADER){
+			reply.Success = false
+			reply.Term = args.Term
+		}else{
+			rf.votedFor = -1
+			rf.currentTerm = args.Term
+			reply.Success = true
+			reply.Term = args.Term
+			rf.chanHeartBeat <- true
+		}
 	}
 
 }
@@ -307,9 +310,9 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 			rf.mu.Lock()
 			rf.appendEntryCount ++
 			fmt.Printf("server(Leader) %d send appendEntry rpc server %d in term %d success \n", rf.me, server, rf.currentTerm)
-			if (rf.appendEntryCount == len(rf.peers)/2) {
-				rf.chanAppendEntrySuccess <- true
-			}
+			//if (rf.appendEntryCount == len(rf.peers)/2) {
+			//	rf.chanAppendEntrySuccess <- true
+			//}
 			rf.mu.Unlock()
 		} else {
 			rf.mu.Lock()

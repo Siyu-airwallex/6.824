@@ -78,8 +78,8 @@ func TestReElection(t *testing.T) {
 	cfg.connect((leader2 + 1) % servers)
 	fmt.Printf("server %d reconnect back to cluster \n", another)
 	cfg.checkOneLeader()
-	//
-	//// re-join of last node shouldn't prevent leader from existing.
+
+	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
