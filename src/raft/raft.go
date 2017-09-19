@@ -458,7 +458,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				case <-rf.chanGrantVote:
 					rf.state = FOLLOWER
 				case <-rf.chanHeartBeat:
-					//timer.Reset(ElectionTimeoutConst())
 					rf.state = FOLLOWER
 				case <-rf.chanLeader:
 					//rf.mu.Lock()
