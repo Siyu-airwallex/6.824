@@ -281,6 +281,24 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+
+func (rf *Raft) containsEntry(index int, term int) bool{
+	if(len(rf.log) <= index) {
+		return false
+	}else{
+		return rf.log[index].Term == term
+	}
+
+}
+
+
+func min(a,b int) int{
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // AppendEntries RPC handler.
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	fmt.Printf("server %d receive an appendEntry of term %d in term %d \n", rf.me, args.Term, rf.currentTerm)
@@ -291,7 +309,21 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		if(rf.currentTerm == args.Term && rf.state == LEADER){
 			reply.Success = false
 			reply.Term = args.Term
+		}else if(!rf.containsEntry(args.PrevLogIndex, args.PrevLogTerm)){
+			reply.Success = false
+			reply.Term = args.Term
 		}else{
+			if(len(args.Entries) > len(rf.log)){
+				rf.log = append(rf.log, args.Entries[len(args.Entries)-1])
+			}
+			if(args.LeaderCommit > rf.commitIndex){
+				rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+				lastIndex := len(rf.log)-1
+				rf.chanApplyMsg <- ApplyMsg{Index: rf.log[lastIndex].Index, Command: rf.log[lastIndex].Command}
+				if rf.commitIndex > rf.lastApplied {
+					rf.lastApplied ++
+				}
+			}
 			rf.votedFor = -1
 			rf.currentTerm = args.Term
 			reply.Success = true
@@ -302,17 +334,20 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 }
 
+
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	fmt.Printf("server(leader) %d send appendEntry rpc to server %d in term %d, waiting...... \n", rf.me, server, rf.currentTerm)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if (ok) {
 		if (rf.state == LEADER && reply.Success) {
 			rf.mu.Lock()
-			rf.appendEntryCount ++
+			if(rf.log[len(rf.log)-1].Index > rf.commitIndex){
+				rf.appendEntryCount ++
+				if(rf.appendEntryCount == len(rf.peers)/2){
+					rf.chanCommit <- true
+				}
+			}
 			fmt.Printf("server(Leader) %d send appendEntry rpc server %d in term %d success \n", rf.me, server, rf.currentTerm)
-			//if (rf.appendEntryCount == len(rf.peers)/2) {
-			//	rf.chanAppendEntrySuccess <- true
-			//}
 			rf.mu.Unlock()
 		} else {
 			rf.mu.Lock()
@@ -335,7 +370,7 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 }
 
 func (rf *Raft) boardcastAppendEntries() {
-	//rf.appendEntryCount = 0
+	rf.appendEntryCount = 0
 	fmt.Printf("server(Leader): %d broadcast AppendEntries in term %d \n", rf.me, rf.currentTerm)
 	args := AppendEntriesArgs{rf.currentTerm, rf.me, rf.getPrevLogIndex(), rf.getPrevLogTerm(), rf.log, rf.commitIndex}
 	reply := &AppendEntriesReply{}
@@ -405,8 +440,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here.
 	rf.state = FOLLOWER
 	rf.votedFor = -1
-	rf.log = append(rf.log, LogEntry{Term: 0})
+	rf.log = append(rf.log, LogEntry{Term:0, Index:0, Command:nil})
 	rf.currentTerm = 0
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.chanAppendEntrySuccess = make(chan bool)
 	rf.chanHeartBeat = make(chan bool)
 	rf.chanCommit = make(chan bool, 100)
@@ -437,6 +474,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case LEADER:
 				go rf.boardcastAppendEntries()
 				select {
+				case <- rf.chanCommit:
+					rf.commitIndex ++
+					lastIndex := len(rf.log)-1
+					rf.chanApplyMsg <- ApplyMsg{Index:rf.log[lastIndex].Index, Command:rf.log[lastIndex].Command}
+					if(rf.commitIndex > rf.lastApplied){
+						rf.lastApplied ++
+					}
 				case <-rf.chanGrantVote:
 					rf.state = FOLLOWER
 					fmt.Printf("server(Leader) %d changes to follower[chanGrantVote] in term %d \n", rf.me, rf.currentTerm)
