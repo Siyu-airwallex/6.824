@@ -227,15 +227,16 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 	if (ok) {
 		if (rf.state == CANDIDATE && rf.currentTerm == reply.Term && reply.VoteGranted == true) {
 			rf.voteCount ++
-			rf.once.Do(
-			func() {
-				if (rf.voteCount > len(rf.peers)/2) {
-					if (rf.state != LEADER) {
-						fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
-						rf.chanLeader <- true
-					}
+
+			if (rf.voteCount > len(rf.peers)/2) {
+				if (rf.state != LEADER) {
+					rf.once.Do(
+						func() {
+							fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
+							rf.chanLeader <- true
+					})
 				}
-			})
+			}
 		}
 		if (rf.state == CANDIDATE && rf.currentTerm < reply.Term) {
 			rf.votedFor = -1
@@ -288,10 +289,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Success = false
 		reply.Term = rf.currentTerm
 	} else {
-		if(rf.currentTerm == args.Term && rf.state == LEADER){
+		if (rf.currentTerm == args.Term && rf.state == LEADER) {
 			reply.Success = false
 			reply.Term = args.Term
-		}else{
+		} else {
 			rf.votedFor = -1
 			rf.currentTerm = args.Term
 			reply.Success = true
