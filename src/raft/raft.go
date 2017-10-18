@@ -17,12 +17,13 @@ package raft
 //   in the same server.
 //
 
-import "sync"
 import (
 	"labrpc"
 	"time"
 	"math/rand"
 	"fmt"
+	"sync"
+	"github.com/matryer/resync"
 )
 
 // import "bytes"
@@ -60,7 +61,7 @@ type LogEntry struct {
 //
 type Raft struct {
 	wg        sync.WaitGroup
-	once      sync.Once
+	once      resync.Once
 	mu        sync.Mutex
 	peers     []*labrpc.ClientEnd
 	persister *Persister
@@ -449,6 +450,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case CANDIDATE:
 				timer := time.NewTimer(ElectionTimeoutConst())
 				//rf.mu.Lock()
+				rf.once.Reset()
 				rf.currentTerm ++
 				rf.votedFor = rf.me
 				rf.voteCount = 1
