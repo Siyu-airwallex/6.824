@@ -23,6 +23,7 @@ import (
 	"time"
 	"math/rand"
 	"fmt"
+	"github.com/matryer/resync"
 )
 
 // import "bytes"
@@ -60,7 +61,7 @@ type LogEntry struct {
 //
 type Raft struct {
 	wg        sync.WaitGroup
-	once      sync.Once
+	once      resync.Once
 	mu        sync.Mutex
 	peers     []*labrpc.ClientEnd
 	persister *Persister
@@ -227,15 +228,15 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 	if (ok) {
 		if (rf.state == CANDIDATE && rf.currentTerm == reply.Term && reply.VoteGranted == true) {
 			rf.voteCount ++
-			rf.once.Do(
-			func() {
-				if (rf.voteCount > len(rf.peers)/2) {
-					if (rf.state != LEADER) {
-						fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
-						rf.chanLeader <- true
-					}
+			if (rf.voteCount > len(rf.peers)/2) {
+				if (rf.state != LEADER) {
+					rf.once.Do(
+						func() {
+							fmt.Printf("sever %d becomes leader in term %d \n", rf.me, rf.currentTerm)
+							rf.chanLeader <- true
+						}	)
 				}
-			})
+			}
 		}
 		if (rf.state == CANDIDATE && rf.currentTerm < reply.Term) {
 			rf.votedFor = -1
@@ -404,7 +405,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = rf.getLastLogIndex() + 1
 		rf.log = append(rf.log, LogEntry{index, command, term})
 	}
-
 	return index, term, isLeader
 }
 
@@ -492,6 +492,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case CANDIDATE:
 				timer := time.NewTimer(ElectionTimeoutConst())
 				//rf.mu.Lock()
+				rf.once.Reset()
 				rf.currentTerm ++
 				rf.votedFor = rf.me
 				rf.voteCount = 1
